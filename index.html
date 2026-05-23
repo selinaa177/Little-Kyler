@@ -298,8 +298,29 @@ const MOODS = [
 ];
 const TRIGGERS = ['起床','吃饭','上学','放学','洗澡','睡觉','玩耍','看视频','被拒绝','分享','换衣服'];
 const CAT_ICON  = {生病:'🏥', 疫苗:'💉', 里程碑:'🎯', 其他:'📋'};
-const ELEMENTS_CN = ['小火箭','宇宙飞船','会说话的恐龙','魔法汽车','勇敢的小狮子','神秘的星球','海底王国','会飞的摩托车','友好的外星人','萤火虫森林'];
-const ELEMENTS_EN = ['a little rocket','a friendly spaceship','a talking dinosaur','a magic race car','a brave lion cub','a mysterious planet','the underwater kingdom','a flying motorcycle','a friendly alien','a glowing firefly forest'];
+const ELEMENTS_CN = [
+  '小火箭','宇宙飞船','会说话的恐龙','魔法汽车','勇敢的小狮子','神秘的星球','海底王国','会飞的摩托车','友好的外星人','萤火虫森林',
+  '云朵上的小火车','爱唱歌的鲸鱼','会变色的变色龙','月亮上的面包店','骑自行车的企鹅','彩虹桥上的邮局','树洞里的图书馆','会做饭的机器人',
+  '住在鞋子里的蚂蚁一家','夜晚会发光的蘑菇','爱冒险的小章鱼','沙漠里的绿洲花园','飞行背包','时光倒流的怀表','会走路的房子',
+  '冰淇淋星球','地下恐龙城市','超级快递员猫头鹰','彩色泡泡组成的城堡','和影子交朋友','会讲笑话的石头','倒着长的大树',
+  '纸飞机环球旅行','星星工厂','消防员小松鼠','潜水艇去北极','雪人去海边度假','种子变成巨树','睡着的火山醒了'
+];
+const ELEMENTS_EN = [
+  'a little rocket','a friendly spaceship','a talking dinosaur','a magic race car','a brave lion cub','a mysterious planet','the underwater kingdom','a flying motorcycle','a friendly alien','a glowing firefly forest',
+  'a train on the clouds','a whale who loves singing','a color-changing chameleon','a bakery on the moon','a penguin riding a bicycle','a post office on a rainbow bridge','a library inside a tree hole','a cooking robot',
+  'an ant family living in a shoe','glowing mushrooms at night','an adventurous little octopus','an oasis garden in the desert','a flying backpack','a time-rewinding pocket watch','a walking house',
+  'an ice cream planet','an underground dinosaur city','an owl super-courier','a castle made of colorful bubbles','making friends with shadows','a stone that tells jokes','an upside-down tree',
+  'a paper airplane world trip','a star factory','a firefighter squirrel','a submarine going to the North Pole','a snowman on a beach vacation','a seed growing into a giant tree','a sleeping volcano waking up'
+];
+const STORY_GENRES = ['冒险探索','友谊互助','解决问题','勇气成长','好奇心探究','助人为乐','克服害怕','团队合作','想象创造','自然科普'];
+const STORY_STRUCTURES = [
+  '主角遇到难题→想办法→成功解决→开心入睡',
+  '主角和新朋友相遇→一起冒险→收获友谊→温暖告别',
+  '主角发现一个奇妙的地方→探索→学到新东西→带着快乐回家',
+  '主角犯了小错误→意识到问题→勇敢弥补→被原谅后安心入睡',
+  '主角帮助别人→过程中遇到困难→坚持不放弃→大家一起庆祝',
+  '主角害怕一件事→慢慢了解它→发现其实不可怕→安心入睡',
+];
 
 // ══════════════════════════════════════════
 // STATE
@@ -312,6 +333,7 @@ let S = {
   tipHistory: [],     // [{date, title, content, actionTip, starred}]
   moodLog:    [],     // [{date, mood, triggers:[], note}]
   events:     [],     // [{id, date, category, description, note, symptoms:[], vaccineName}]
+  storyHistory:[],    // [{date, title, lang}] for de-duplication
   totalTokens:0,
 };
 
@@ -337,7 +359,11 @@ function getChildAgeNum() {
   if (!S.childBirthday) return 4;
   const b = new Date(S.childBirthday), n = new Date();
   let y = n.getFullYear() - b.getFullYear();
-  if (n.getMonth() < b.getMonth() || (n.getMonth() === b.getMonth() && n.getDate() < b.getDate())) y--;
+  let m = n.getMonth() - b.getMonth();
+  if (m < 0) { y--; m += 12; }
+  if (n.getDate() < b.getDate()) m--;
+  // Round up when within 3 months of next birthday (developmental content should target ahead)
+  if (m >= 9) y++;
   return Math.max(2, Math.min(7, y));
 }
 
@@ -662,27 +688,49 @@ async function genStory() {
   const age = getChildAgeNum();
   const isEn = storyLang === 'en';
   const elements = pickRandom(isEn ? ELEMENTS_EN : ELEMENTS_CN, 3);
+  const genre = pickRandom(STORY_GENRES, 1)[0];
+  const structure = pickRandom(STORY_STRUCTURES, 1)[0];
+
+  // Collect recent story titles to avoid repetition
+  const recentTitles = [];
+  if (S.storyHistory) S.storyHistory.slice(0, 8).forEach(h => { if(h.title) recentTitles.push(h.title); });
 
   document.getElementById('storyContent').innerHTML = buildStoryLoadingHtml();
 
   try {
     let story;
+    const avoidStr = recentTitles.length ? `\n\n【重要】以下是最近讲过的故事标题，请务必创作完全不同的新故事，不要重复类似的主角、场景或剧情：\n${recentTitles.join('\n')}` : '';
+
     if (!isEn) {
       story = await dsJSON(
-        '你是温柔有爱的儿童故事作家。内容安全正向，绝无暴力恐怖或不适合儿童的元素。仅返回JSON，不含任何其他文字。',
-        `为${age}岁男孩写一个温馨睡前故事。融入以下2-3个元素：${elements.join('、')}。\n节奏从活泼到平静，适合入睡。约700-900字。\nJSON格式：{"title":"...","body":"...","goodnightMsg":"..."}`,
+        '你是一位富有想象力的儿童故事作家，每次都创作风格和内容完全不同的全新故事。内容安全正向，绝无暴力恐怖或不适合儿童的元素。仅返回JSON，不含任何其他文字。',
+        `为${age}岁男孩写一个温馨睡前故事。
+主题方向：${genre}
+故事结构：${structure}
+融入以下元素中的2-3个：${elements.join('、')}
+要求：故事要有具体的主角名字，有生动的场景细节，节奏从活泼到平静适合入睡。约700-900字。${avoidStr}
+JSON格式：{"title":"...","body":"...","goodnightMsg":"..."}`,
         1300
       );
     } else {
       story = await dsJSON(
-        'You are a gentle children\'s story writer. Content must be safe and positive — absolutely no violence, scary or inappropriate content. Return ONLY JSON, no other text.',
-        `Write a cozy bedtime story for a ${age}-year-old boy. Include 2-3 of these elements: ${elements.join(', ')}.\nPace: lively then gradually calm for sleep. ~500 words.\nAlso add a brief Chinese summary (摘要) under 80 characters.\nJSON: {"title":"...","body":"...","goodnightMsg":"...","summary":"（中文摘要：...）"}`,
+        'You are an imaginative children\'s story writer who creates completely different stories each time. Content must be safe and positive — absolutely no violence, scary or inappropriate content. Return ONLY JSON, no other text.',
+        `Write a cozy bedtime story for a ${age}-year-old boy.
+Theme: ${genre}
+Structure: ${structure}
+Include 2-3 of these elements: ${elements.join(', ')}
+Requirements: Give the main character a specific name, include vivid scene details, pace from lively to calm for sleep. ~500 words. Also add a brief Chinese summary under 80 chars.${avoidStr}
+JSON: {"title":"...","body":"...","goodnightMsg":"...","summary":"（中文摘要：...）"}`,
         1200
       );
     }
 
     if (!S.dailyStory || !isTodayData(S.dailyStory)) S.dailyStory = {date:todayStr(), cn:null, en:null};
     S.dailyStory[storyLang] = story;
+    // Track history for de-duplication
+    if (!S.storyHistory) S.storyHistory = [];
+    S.storyHistory.unshift({date:todayStr(), title:story.title, lang:storyLang});
+    if (S.storyHistory.length > 30) S.storyHistory = S.storyHistory.slice(0, 30);
     save();
     renderStory();
     renderDashStoryCard();
@@ -769,15 +817,60 @@ function renderTips() {
   el.innerHTML = todayHtml + starredHtml + histHtml;
 }
 
+const TIP_TOPICS = [
+  // 叛逆期
+  '孩子说"不要"时的正确回应方式','为什么不能跟4岁孩子讲道理','叛逆期其实是自我意识觉醒',
+  '给孩子有限选择权来减少对抗','孩子发脾气时家长的情绪管理','用"可以"替代"不行"的话术',
+  // 沟通
+  '蹲下来说话的重要性','用描述代替评价(说"你把积木搭了5层"而不是"你真棒")','倾听比回答更重要',
+  '如何让孩子愿意分享幼儿园的事','睡前三句话建立安全感','提问技巧：开放式 vs 封闭式',
+  // 男孩养育
+  '4岁男孩的精力管理','为什么男孩更需要身体接触','攻击性行为背后的需求',
+  '男孩语言发展略晚是正常的','如何引导男孩表达情绪而非动手','父亲角色在男孩成长中的作用',
+  // 省力育儿
+  '低能量日的"够好"育儿策略','用定时器代替催促','睡前仪式固定化省心指南',
+  '让孩子参与家务的省力技巧','屏幕时间的合理边界怎么设','当你实在没耐心时可以说的3句话',
+  // 情绪发展
+  '4岁孩子的恐惧感是正常发展','帮孩子给情绪命名的方法','分离焦虑的处理',
+  '嫉妒心理的出现和引导','如何处理孩子的"撒谎"行为','输不起/怕失败的心理疏导',
+  // 社交
+  '4岁孩子的友谊概念','分享不应该被强迫','幼儿园社交冲突的引导',
+  '孩子被排挤时怎么做','角色扮演游戏对社交能力的促进','如何教孩子道歉和原谅',
+  // 认知发展
+  '4岁是"为什么"爆发期的意义','用日常生活教数学概念','想象力 vs 撒谎的区别',
+  '培养专注力的自然方法','绘本阅读的互动技巧','好奇心保护比知识灌输更重要',
+  // 生活习惯
+  '挑食阶段的不焦虑应对','如何让孩子自己穿衣服','建立规律作息的温和方法',
+  '如厕训练的常见问题','户外运动对大脑发育的影响','看动画片上瘾怎么办',
+];
+
 async function genTip(e) {
   if (e) e.stopPropagation();
   const el = document.getElementById('tipsContent');
   el.innerHTML = `<div class="generating"><span class="gen-icon">💡</span>正在生成今日育儿知识…</div>`;
   const age = getChildAgeNum();
+
+  // Pick a specific topic, avoiding recent ones
+  const recentTitles = S.tipHistory.slice(0, 10).map(t => t.title);
+  const available = TIP_TOPICS.filter(t => !recentTitles.some(r => r && r.includes(t.slice(0, 6))));
+  const topic = pickRandom(available.length > 3 ? available : TIP_TOPICS, 1)[0];
+
   try {
     const tip = await dsJSON(
-      '你是专业儿童心理和早教专家。内容实用、正向、不说教。仅返回JSON，不含其他文字。',
-      `为忙碌的职场妈妈生成今日育儿小知识。宝宝：${age}岁男孩，自我意识发展期（叛逆期）。\n方向随机选：叛逆期应对/亲子沟通话术/男孩养育/省力育儿/情绪引导/睡前仪式。\nJSON：{"title":"...（10字内）","content":"...（3-5句话，实用）","actionTip":"...（今天可以试试的一件小事，20字内）"}`,
+      '你是专业的儿童发展心理学家和早教专家，擅长给忙碌家长提供具体、可操作、不说教的育儿建议。仅返回JSON，不含其他文字。',
+      `请围绕以下具体主题，为一位忙碌的职场妈妈写一条育儿知识卡片。
+
+主题：${topic}
+孩子：${age}岁男孩，上幼儿园，目前处于自我意识发展期，有时比较倔强和对抗。妈妈精力有限。
+
+要求：
+- 标题要具体、吸引人，不要泛泛而谈（10字内）
+- 内容要有具体的场景举例和话术示范（3-5句话）
+- 行动建议必须是今天就能做的一件小事，不需要额外准备
+
+${recentTitles.length ? '【重要】以下标题已经生成过，内容和角度必须完全不同：\n' + recentTitles.join('、') : ''}
+
+JSON：{"title":"...","content":"...","actionTip":"💡 ...（今天试试：...）"}`,
       500
     );
     S.dailyTip = {date:todayStr(), starred:false, ...tip};
